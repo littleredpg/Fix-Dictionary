@@ -242,6 +242,24 @@ function badge(val, opts) {
   return '<span class="badge badge-' + cls + (opts.sm?' badge-sm':'') + (opts.full?' full':'') + '" title="' + escHtml(val) + '"><span class="badge-dot"></span>' + label + '</span>';
 }
 
+// Special badge for table cells — handles algo truncation and fractional trimming
+function badgeForTable(key, val) {
+  if (!val || val.trim() === '') return '<span class="badge badge-none">—</span>';
+  if (key === 'fix_algo') {
+    var algos = val.split(',').map(function(a){ return a.trim(); }).filter(Boolean);
+    var cls   = classify(val);
+    if (algos.length <= 3) {
+      return '<span class="badge badge-' + cls + '" title="' + escHtml(val) + '"><span class="badge-dot"></span>' + escHtml(algos.join(', ')) + '</span>';
+    }
+    var shown = algos.slice(0, 3).join(', ');
+    var extra = algos.length - 3;
+    return '<span class="badge badge-' + cls + '" title="' + escHtml(val) + '">' +
+           '<span class="badge-dot"></span>' + escHtml(shown) +
+           ' <span style="opacity:.6;font-weight:500">+' + extra + ' more</span></span>';
+  }
+  return badge(val, { short: true });
+}
+
 function shortLabel(val) {
   var v = val.toLowerCase();
   if (v === 'available') return 'Available';
@@ -263,21 +281,31 @@ function shortLabel(val) {
   if (v.includes('1 leg')) return 'Avail. (1 Leg)';
   if (v.includes('batches') || v.includes('15 minute')) return 'Batched';
   if (v.includes('via file')) return 'Via File';
+  if (v.includes('full liquidation fractional')) return 'Full Liq. Only';
   return val.length > 22 ? val.slice(0,20) + '…' : val;
 }
 
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-var FILTERS = [
-  { id:'fractional',   label:'Fractional Shares',     test:function(c){ return !!c.fractional; } },
-  { id:'options',      label:'Options Trading',        test:function(c){ return !!c.options; } },
-  { id:'fix_algo',     label:'FIX Algos',              test:function(c){ return !!c.fix_algo; } },
-  { id:'mutual_funds', label:'Mutual Funds',           test:function(c){ return !!c.mutual_funds; } },
-  { id:'realtime',     label:'Real-Time Equity Alloc', test:function(c){ return c.equity_alloc.toLowerCase().includes('real time'); } },
-  { id:'acks',         label:'Sends Alloc Acks',       test:function(c){ return c.alloc_ack.toLowerCase().includes('acks received'); } },
-  { id:'equity_file',  label:'Equity Trade File',      test:function(c){ return !!c.equity_file; } },
-  { id:'vsp_equity',   label:'VSP Equity',             test:function(c){ return !!c.vsp_equity; } },
-];
+var TAB_FILTERS = {
+  equity: [
+    { id:'eq_fix',      label:'Has Equity FIX',         test:function(c){ return !!c.equity_fix; } },
+    { id:'eq_alloc',    label:'Has Equity Allocation',   test:function(c){ return !!c.equity_alloc; } },
+    { id:'eq_acks',     label:'Has Alloc Acks',          test:function(c){ return !!c.alloc_ack; } },
+    { id:'eq_vsp',      label:'Has VSP Equity',          test:function(c){ return !!c.vsp_equity; } },
+    { id:'eq_file',     label:'Has Equity Trade File',   test:function(c){ return !!c.equity_file; } },
+    { id:'eq_algo',     label:'Has FIX Algos',           test:function(c){ return !!c.fix_algo; } },
+    { id:'eq_frac',     label:'Has Fractional Shares',   test:function(c){ return !!c.fractional; } },
+  ],
+  mf: [
+    { id:'mf_fix',      label:'Has Mutual Fund FIX',     test:function(c){ return !!c.mutual_funds; } },
+    { id:'mf_vsp',      label:'Has VSP Mutual Funds',    test:function(c){ return !!c.vsp_mf; } },
+    { id:'mf_file',     label:'Has MF Trade File',       test:function(c){ return !!c.mf_file; } },
+  ],
+};
+
+// Combined lookup for filtering
+var FILTERS = [].concat(TAB_FILTERS.equity, TAB_FILTERS.mf);
 
 var TAB_COLS = {
   all:    [ {key:'equity_fix',label:'Equity FIX',short:true},{key:'equity_alloc',label:'Equity Allocation',short:true},{key:'fix_algo',label:'FIX Algos',short:true},{key:'fractional',label:'Fractional',short:true},{key:'mutual_funds',label:'Mutual Funds',short:true},{key:'options',label:'Options',short:true} ],
@@ -338,12 +366,18 @@ function renderOverview() {
 
   document.getElementById('page-title').innerHTML = 'Overview <span class="page-sub">' + total + ' custodians</span>';
 
-  var cols  = TAB_COLS[state.tab];
-  var pills = FILTERS.map(function(f) {
-    var count = CUSTODIANS.filter(f.test).length;
-    var active = state.activeFilters.has(f.id);
-    return '<div class="filter-pill' + (active?' active':'') + '" onclick="toggleFilter(\'' + f.id + '\')">' + escHtml(f.label) + '<span class="pill-count">' + count + '</span></div>';
-  }).join('');
+  var cols = TAB_COLS[state.tab];
+
+  var tabFilters = TAB_FILTERS[state.tab] || [];
+  var pillsHtml = '';
+  if (tabFilters.length > 0) {
+    var pills = tabFilters.map(function(f) {
+      var count  = CUSTODIANS.filter(f.test).length;
+      var active = state.activeFilters.has(f.id);
+      return '<div class="filter-pill' + (active?' active':'') + '" onclick="toggleFilter(\'' + f.id + '\')">' + escHtml(f.label) + '<span class="pill-count">' + count + '</span></div>';
+    }).join('');
+    pillsHtml = '<div class="filter-label">Quick Filters — Who has…</div><div class="filter-pills">' + pills + '</div>';
+  }
 
   var tabs = [{id:'all',label:'All'},{id:'equity',label:'📈 Equity'},{id:'mf',label:'📊 Mutual Funds'},{id:'options',label:'🎯 Options'}]
     .map(function(t){ return '<div class="filter-tab' + (state.tab===t.id?' active':'') + '" onclick="setTab(\'' + t.id + '\')">' + t.label + '</div>'; }).join('');
@@ -352,7 +386,7 @@ function renderOverview() {
   var rows = filtered.length === 0
     ? '<tr><td colspan="' + (cols.length+1) + '"><div class="no-results">No custodians match your filters</div></td></tr>'
     : filtered.map(function(c) {
-        var tds = cols.map(function(col){ return '<td>' + badge(c[col.key], {short:col.short}) + '</td>'; }).join('');
+        var tds = cols.map(function(col){ return '<td>' + badgeForTable(col.key, c[col.key]) + '</td>'; }).join('');
         var n   = c.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
         return '<tr onclick="showCustodian(\'' + n + '\')">' + '<td><span class="cust-name">' + escHtml(c.name) + '</span></td>' + tds + '</tr>';
       }).join('');
@@ -368,12 +402,12 @@ function renderOverview() {
     '<div class="stat-card"><div class="stat-icon">✂️</div><div class="stat-num">' + withFrac   + '</div><div class="stat-label">Fractional Shares</div></div>' +
     '<div class="stat-card"><div class="stat-icon">⚡</div><div class="stat-num">' + withAlgo   + '</div><div class="stat-label">FIX Algos</div></div>' +
     '</div>' +
-    '<div class="filter-section"><div class="filter-tabs">' + tabs + '</div><div class="filter-label">Quick Filters — Who supports…</div><div class="filter-pills">' + pills + '</div></div>' +
+    '<div class="filter-section"><div class="filter-tabs">' + tabs + '</div>' + pillsHtml + '</div>' +
     '<div class="table-wrap"><div class="table-header"><span class="result-count">Showing <strong>' + filtered.length + '</strong> of ' + total + ' custodians' + (state.activeFilters.size>0?' (filtered)':'') + '</span>' + clearBtn + '</div>' +
     '<table><thead><tr><th>Custodian</th>' + ths + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 
-function setTab(t) { state.tab=t; renderOverview(); }
+function setTab(t) { state.tab=t; state.activeFilters.clear(); renderOverview(); }
 function toggleFilter(id) { if(state.activeFilters.has(id)) state.activeFilters.delete(id); else state.activeFilters.add(id); renderOverview(); }
 function clearFilters() { state.activeFilters.clear(); renderOverview(); }
 
